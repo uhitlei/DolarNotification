@@ -25,19 +25,22 @@ Projeto pessoal de dezembro de 2015, feito no Visual Studio 2013. A ideia era si
 
 ## Como funciona
 
-1. A cada 30 segundos, um `System.Timers.Timer` baixa duas páginas do site Dólar Hoje: a principal (`dolarhoje.net.br`, dólar comercial) e `dolarturismo.php` (dólar turismo).
-2. Uma expressão regular procura o elemento `<span id="moeda">` de cada página e lê o número que vem depois do último `R$`, no formato brasileiro (`3,87`).
+1. A cada 30 segundos, um `System.Timers.Timer` consulta a [AwesomeAPI](https://docs.awesomeapi.com.br/api-de-moedas), uma API pública e gratuita de cotações, sem chave de acesso. Uma única chamada traz o dólar comercial (`USD-BRL`) e o turismo (`USD-BRLT`):
+   ```
+   GET https://economia.awesomeapi.com.br/json/last/USD-BRL,USD-BRLT
+   ```
+2. De cada cotação é usado o valor de compra (`bid`), que a API envia como texto com ponto decimal (`"5.883"`).
 3. Se as duas cotações foram lidas e alguma delas é diferente da última conhecida, o programa:
    - mostra um balão **"Alteração no Dolar!"** com o valor anterior e o atual de cada cotação;
    - atualiza a dica do ícone (`Comercial: R$… / Turismo: R$…`);
    - acrescenta um ponto em cada linha do gráfico (séries *Comercial* e *Turismo*).
 
-A leitura do HTML e a decisão de notificar ficam em [`CotacaoDolar.cs`](CotacaoNotification/CotacaoDolar.cs), separadas da interface:
+A leitura da resposta e a decisão de notificar ficam em [`CotacaoDolar.cs`](CotacaoNotification/CotacaoDolar.cs), separadas da interface:
 
 | Classe | Papel |
 |---|---|
-| `CotacaoParser` | Extrai o valor do HTML e converte o texto `R$ 3,87` em `decimal`, sempre com a cultura pt-BR. |
-| `FonteCotacao` | Baixa a página; erro de rede vira "sem valor" em vez de exceção. |
+| `CotacaoParser` | Lê o JSON da API e extrai as duas cotações, sem depender da cultura da máquina. Resposta incompleta ou inválida vira "sem valor". |
+| `FonteCotacao` | Faz a chamada HTTPS com tempo limite de 10 segundos; erro de rede vira "sem valor" em vez de exceção. |
 | `MonitorCotacao` | Guarda a última cotação, informa se houve variação e monta os textos do balão e da dica. |
 
 ## Como usar
@@ -107,8 +110,7 @@ git push origin v1.1.0
 
 ## Limitações conhecidas
 
-- **A fonte de dados não funciona mais como em 2015.** O site Dólar Hoje continua no ar, mas mudou de layout: o elemento `<span id="moeda">` que o programa procura não existe mais. Com isso nenhuma cotação é encontrada e nenhum aviso é exibido. Fazer o aplicativo voltar a funcionar exige trocar a fonte, de preferência por uma API pública em vez de leitura de HTML.
-- A extração depende da estrutura exata da página, então qualquer mudança no site quebra a leitura.
+- Depende da disponibilidade da AwesomeAPI, um serviço gratuito de terceiros. Se ela sair do ar ou limitar as requisições, o programa simplesmente deixa de avisar até a API voltar.
 - O intervalo de 30 segundos está fixo no código.
 - Só roda no Windows (Windows Forms, `NotifyIcon` e o controle de gráfico `System.Windows.Forms.DataVisualization`).
 - O `TesteConsole` é um rascunho: chama serviços externos sem tratamento de erro e não tem testes.
@@ -117,14 +119,14 @@ git push origin v1.1.0
 
 Ao revisitar o projeto, foram feitas estas correções e adições:
 
-- A leitura do HTML e a detecção de variação saíram dos formulários para `CotacaoDolar.cs`, compartilhado pelos dois aplicativos e coberto por testes. Os textos do balão e da dica continuam os mesmos.
-- O valor era convertido com a cultura da máquina: em um Windows em inglês, `3,87` virava `387`. Agora a conversão usa sempre pt-BR.
-- Só eram lidos 4 caracteres depois do `R$`: `R$ 3,87` virava `3,8` e `R$10,50` virava `10,5`. Agora o número é lido inteiro.
+- **Fonte de dados nova:** a versão de 2015 lia o HTML do site Dólar Hoje, que mudou de layout e quebrou a leitura (o programa nunca mais avisava nada). Agora a cotação vem da AwesomeAPI, numa única chamada para as duas cotações, e o programa voltou a funcionar.
+- A leitura da cotação e a detecção de variação saíram dos formulários para `CotacaoDolar.cs`, compartilhado pelos dois aplicativos e coberto por testes. Os textos do balão e da dica continuam os mesmos.
+- Na leitura antiga, o valor era convertido com a cultura da máquina (em um Windows em inglês, `3,87` virava `387`) e só eram lidos 4 caracteres depois do `R$` (`R$10,50` virava `10,5`). A leitura nova não depende da cultura e lê o número inteiro.
 - Uma falha de rede ou de leitura gerava um balão com `Atual(R$.00)`. Agora o aviso só aparece quando as duas cotações foram lidas.
 - As respostas HTTP não eram fechadas em caso de erro, e a primeira nunca era; agora são descartadas com `using`.
 - O timer roda em outra thread e alterava o ícone e o gráfico diretamente; as atualizações agora passam pela thread da interface.
 - O timer continuava disparando depois de **Sair**; agora é descartado junto com a janela.
-- Endereços do site atualizados para `https`.
+- A consulta usa HTTPS com TLS 1.2 e tempo limite.
 - Projetos migrados de .NET Framework 4.5/4.5.1 para 4.8.
 - Projeto de testes, pipeline de CI/CD, licença e esta documentação.
 

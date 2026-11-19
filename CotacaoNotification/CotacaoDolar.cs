@@ -1,96 +1,104 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Net;
-using System.Text.RegularExpressions;
+using System.Text;
+using System.Web.Script.Serialization;
 
 namespace CotacaoNotification
 {
     /// <summary>
-    /// Extrai o valor do dólar do HTML da página de cotação.
-    /// Não depende de Windows Forms nem de rede, para poder ser testada.
+    /// Lê o dólar comercial e o turismo da resposta JSON da AwesomeAPI
+    /// (https://economia.awesomeapi.com.br). Não depende de Windows Forms nem de rede,
+    /// para poder ser testada.
     /// </summary>
     public static class CotacaoParser
     {
-        /// <summary>Página do dólar comercial.</summary>
-        public const string UrlComercial = "https://www.dolarhoje.net.br";
+        /// <summary>Uma única chamada traz o dólar comercial (USD-BRL) e o turismo (USD-BRLT).</summary>
+        public const string UrlApi = "https://economia.awesomeapi.com.br/json/last/USD-BRL,USD-BRLT";
 
-        /// <summary>Página do dólar turismo.</summary>
-        public const string UrlTurismo = "https://www.dolarhoje.net.br/dolarturismo.php";
+        /// <summary>Chave do dólar comercial na resposta.</summary>
+        public const string ChaveComercial = "USDBRL";
 
-        /// <summary>Trecho do HTML que continha o dólar comercial (layout de 2015).</summary>
-        public const string PadraoComercial = @"<span id=""moeda"" class>(.*?)</span>";
-
-        /// <summary>Trecho do HTML que continha o dólar turismo (layout de 2015).</summary>
-        public const string PadraoTurismo = @"<span id=""moeda"">(.*?)</span>";
-
-        /// <summary>A página publica os valores no formato brasileiro (ex.: "3,87").</summary>
-        public static readonly CultureInfo CulturaFonte = CultureInfo.GetCultureInfo("pt-BR");
-
-        private static readonly Regex Numero = new Regex(
-            @"^\s*(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:,\d+)?)",
-            RegexOptions.CultureInvariant);
+        /// <summary>Chave do dólar turismo na resposta.</summary>
+        public const string ChaveTurismo = "USDBRLT";
 
         /// <summary>
-        /// Procura o padrão no HTML e converte o valor que vem depois do último "R$".
-        /// Se houver mais de uma ocorrência, vale a última (como no código original).
+        /// Extrai o valor de compra ("bid") das duas cotações. Retorna false se a resposta
+        /// não for um JSON válido ou se faltar alguma das cotações.
         /// </summary>
-        public static bool TryExtrair(string html, string padrao, out decimal valor)
+        public static bool TryExtrair(string json, out decimal comercial, out decimal turismo)
         {
-            valor = 0m;
-            if (string.IsNullOrEmpty(html) || string.IsNullOrEmpty(padrao))
+            comercial = 0m;
+            turismo = 0m;
+            if (string.IsNullOrWhiteSpace(json))
                 return false;
 
-            bool encontrou = false;
-            MatchCollection matches = Regex.Matches(html, padrao, RegexOptions.IgnoreCase | RegexOptions.Singleline);
-            foreach (Match match in matches)
+            Dictionary<string, object> raiz;
+            try
             {
-                decimal atual;
-                if (match.Success && match.Groups.Count > 1 && TryConverterValor(match.Groups[1].Value, out atual))
-                {
-                    valor = atual;
-                    encontrou = true;
-                }
+                raiz = new JavaScriptSerializer().DeserializeObject(json) as Dictionary<string, object>;
             }
-            return encontrou;
+            catch (ArgumentException)
+            {
+                return false;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+
+            return raiz != null
+                && TryLerBid(raiz, ChaveComercial, out comercial)
+                && TryLerBid(raiz, ChaveTurismo, out turismo);
         }
 
-        /// <summary>
-        /// Converte um texto como "US$ 1,00 = R$ 3,87" no número que vem depois do último "R$".
-        /// </summary>
-        public static bool TryConverterValor(string texto, out decimal valor)
+        private static bool TryLerBid(Dictionary<string, object> raiz, string chave, out decimal valor)
         {
             valor = 0m;
-            if (string.IsNullOrEmpty(texto))
+            object item;
+            if (!raiz.TryGetValue(chave, out item))
                 return false;
 
-            int posicao = texto.LastIndexOf("R$", StringComparison.Ordinal);
-            if (posicao < 0)
+            var cotacao = item as Dictionary<string, object>;
+            object bid;
+            if (cotacao == null || !cotacao.TryGetValue("bid", out bid) || bid == null)
                 return false;
 
-            Match m = Numero.Match(texto.Substring(posicao + 2));
-            if (!m.Success)
-                return false;
-
-            return decimal.TryParse(m.Groups[1].Value, NumberStyles.Number, CulturaFonte, out valor);
+            // A API envia os números como texto com ponto decimal ("5.883"),
+            // independentemente da cultura da máquina.
+            string texto = Convert.ToString(bid, CultureInfo.InvariantCulture);
+            return decimal.TryParse(texto, NumberStyles.Number, CultureInfo.InvariantCulture, out valor)
+                && valor > 0m;
         }
     }
 
     /// <summary>
-    /// Baixa a página e extrai o valor. Falhas de rede viram "sem valor" em vez de exceção.
+    /// Consulta a API. Falhas de rede viram "sem valor" em vez de exceção.
     /// </summary>
     public static class FonteCotacao
     {
-        public static bool TryLer(string url, string padrao, out decimal valor)
+        private const int TimeoutMs = 10000;
+
+        public static bool TryLer(out decimal comercial, out decimal turismo)
         {
-            valor = 0m;
+            comercial = 0m;
+            turismo = 0m;
             try
             {
-                WebRequest req = WebRequest.Create(url);
+                ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+
+                var req = (HttpWebRequest)WebRequest.Create(CotacaoParser.UrlApi);
+                req.Timeout = TimeoutMs;
+                req.ReadWriteTimeout = TimeoutMs;
+                req.UserAgent = "DolarNotification";
+                req.Accept = "application/json";
+
                 using (WebResponse res = req.GetResponse())
-                using (StreamReader reader = new StreamReader(res.GetResponseStream()))
+                using (var reader = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
                 {
-                    return CotacaoParser.TryExtrair(reader.ReadToEnd(), padrao, out valor);
+                    return CotacaoParser.TryExtrair(reader.ReadToEnd(), out comercial, out turismo);
                 }
             }
             catch (WebException)

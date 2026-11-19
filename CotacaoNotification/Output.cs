@@ -72,8 +72,7 @@ namespace CotacaoNotification
 
             // So notifica quando as duas cotacoes foram lidas; antes, uma falha
             // de rede ou de parse gerava um aviso com "Atual(R$.00)".
-            if (!FonteCotacao.TryLer(CotacaoParser.UrlComercial, CotacaoParser.PadraoComercial, out comercial)
-                || !FonteCotacao.TryLer(CotacaoParser.UrlTurismo, CotacaoParser.PadraoTurismo, out turismo))
+            if (!FonteCotacao.TryLer(out comercial, out turismo))
             {
                 return;
             }
