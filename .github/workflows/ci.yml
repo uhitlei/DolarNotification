@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [master, develop]
+    tags: ['v*']
+  pull_request:
+    branches: [master, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build e testes
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - uses: NuGet/setup-nuget@v2
+
+      - name: Restaurar pacotes
+        run: nuget restore Notification.sln
+
+      - name: Compilar
+        run: msbuild Notification.sln /p:Configuration=Release /m /v:minimal
+
+      - name: Testes
+        run: |
+          packages\NUnit.ConsoleRunner.3.11.1\tools\nunit3-console.exe `
+            CotacaoNotification.Tests\bin\Release\CotacaoNotification.Tests.dll `
+            --result=TestResult.xml
+
+      - name: Publicar resultado dos testes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resultado-testes
+          path: TestResult.xml
+
+      - name: Empacotar executável
+        shell: pwsh
+        run: |
+          $origem = "CotacaoNotification\bin\Release"
+          Compress-Archive -Path "$origem\CotacaoNotification.exe", "$origem\CotacaoNotification.exe.config" `
+            -DestinationPath DolarNotification-win.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DolarNotification-win
+          path: DolarNotification-win.zip
+
+  release:
+    name: Publicar release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: DolarNotification-win
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: DolarNotification-win.zip
+          generate_release_notes: true
