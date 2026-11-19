@@ -45,6 +45,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="CotacaoDolar.cs" />
     <Compile Include="Grafico.cs" />
     <Compile Include="Output.cs">
       <SubType>Form</SubType>
